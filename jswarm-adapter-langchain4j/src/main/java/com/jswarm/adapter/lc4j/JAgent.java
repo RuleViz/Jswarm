@@ -5,6 +5,7 @@ import com.jswarm.adapter.lc4j.tool.Lc4jToolBridge;
 import com.jswarm.core.Agent;
 import dev.langchain4j.agent.tool.ToolSpecification;
 import dev.langchain4j.model.chat.ChatModel;
+import dev.langchain4j.model.chat.StreamingChatModel;
 
 import java.util.List;
 import java.util.Objects;
@@ -12,6 +13,14 @@ import java.util.Objects;
 public interface JAgent extends Agent {
 
     ChatModel model();
+
+    default StreamingChatModel streamingModel() {
+        ChatModel m = model();
+        if (m instanceof StreamingChatModel s) {
+            return s;
+        }
+        return null;
+    }
 
     default List<ToolSpecification> externalTools() {
         return List.of();

@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.jswarm.adapter.lc4j.run.SwarmRunner;
 import com.jswarm.core.Swarm;
 import com.jswarm.core.SwarmContext;
+import com.jswarm.core.SwarmEvent;
 import com.jswarm.core.SwarmException;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
@@ -13,6 +14,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
+import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
@@ -41,6 +43,7 @@ public final class ShowcaseHttpServer {
         HttpServer server = HttpServer.create(new InetSocketAddress(PORT), 0);
         server.createContext("/", this::handleStatic);
         server.createContext("/api/chat", this::handleChat);
+        server.createContext("/api/chat/stream", this::handleChatStream);
         server.createContext("/api/reset", this::handleReset);
         server.createContext("/api/features", this::handleFeatures);
         server.createContext("/api/scenario/", this::handleScenario);
@@ -112,6 +115,61 @@ public final class ShowcaseHttpServer {
         } catch (Exception e) {
             e.printStackTrace();
             sendJson(exchange, 500, Map.of("error", "Internal error: " + e.getMessage()));
+        }
+    }
+
+    private void handleChatStream(HttpExchange exchange) throws IOException {
+        if (!"POST".equals(exchange.getRequestMethod())) {
+            exchange.sendResponseHeaders(405, -1);
+            return;
+        }
+        @SuppressWarnings("unchecked")
+        Map<String, String> req = MAPPER.readValue(exchange.getRequestBody(), Map.class);
+        String sessionId = req.getOrDefault("sessionId", UUID.randomUUID().toString());
+        String userId = req.getOrDefault("userId", "u001");
+        String message = req.get("message");
+        if (message == null || message.isBlank()) {
+            sendJson(exchange, 400, Map.of("error", "message is required"));
+            return;
+        }
+
+        ShowcaseSession session = loadOrCreateSession(sessionId, userId);
+        if (!userId.equals(session.context().get("user_id", String.class))) {
+            session.resetContext(ShowcaseSwarmFactory.buildUserContext(
+                    buildResult.userProfileRepository(), userId, sessionId));
+            session.setCurrentAgentId(swarm.entryAgentId());
+            session.setEntryHookFired(false);
+        }
+
+        exchange.getResponseHeaders().set("Content-Type", "text/event-stream; charset=utf-8");
+        exchange.getResponseHeaders().set("Cache-Control", "no-store, no-cache, must-revalidate");
+        exchange.getResponseHeaders().set("Connection", "keep-alive");
+        exchange.sendResponseHeaders(200, 0);
+
+        try (OutputStream os = exchange.getResponseBody()) {
+            try {
+                runner.runStreaming(message, session.context(), event -> {
+                    try {
+                        String eventType = event.getClass().getSimpleName();
+                        String json = MAPPER.writeValueAsString(event);
+                        byte[] sseBytes = ("event: " + eventType + "\ndata: " + json + "\n\n")
+                                .getBytes(StandardCharsets.UTF_8);
+                        os.write(sseBytes);
+                        os.flush();
+                    } catch (IOException e) {
+                        throw new RuntimeException("SSE write failed", e);
+                    }
+                });
+                sessionStore.save(session);
+            } catch (SwarmException e) {
+                String errJson = MAPPER.writeValueAsString(Map.of("error", e.getMessage()));
+                byte[] sseBytes = ("event: RunFailed\ndata: " + errJson + "\n\n")
+                        .getBytes(StandardCharsets.UTF_8);
+                os.write(sseBytes);
+                os.flush();
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
         }
     }
 

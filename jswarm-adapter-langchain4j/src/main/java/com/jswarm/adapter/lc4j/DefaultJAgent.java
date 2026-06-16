@@ -4,6 +4,7 @@ import com.jswarm.adapter.lc4j.tool.Lc4jToolBridge;
 import com.jswarm.core.SwarmContext;
 import dev.langchain4j.agent.tool.ToolSpecification;
 import dev.langchain4j.model.chat.ChatModel;
+import dev.langchain4j.model.chat.StreamingChatModel;
 
 import java.util.List;
 import java.util.function.BiConsumer;
@@ -18,6 +19,7 @@ public class DefaultJAgent implements JAgent {
     private final String instructions;
     private final Function<SwarmContext, String> instructionsProvider;
     private final ChatModel model;
+    private final StreamingChatModel streamingModel;
     private final List<ToolSpecification> externalTools;
     private final ExternalToolExecutor toolExecutor;
     private final Consumer<SwarmContext> onEnter;
@@ -34,6 +36,7 @@ public class DefaultJAgent implements JAgent {
         this.instructions = instructions;
         this.instructionsProvider = null;
         this.model = model;
+        this.streamingModel = null;
         this.externalTools = externalTools != null ? List.copyOf(externalTools) : List.of();
         this.toolExecutor = toolExecutor;
         this.onEnter = null;
@@ -51,6 +54,7 @@ public class DefaultJAgent implements JAgent {
         this.instructions = builder.instructions;
         this.instructionsProvider = builder.instructionsProvider;
         this.model = builder.model;
+        this.streamingModel = builder.streamingModel;
         this.externalTools = bridge.specs();
         this.toolExecutor = bridge.executor();
         this.onEnter = builder.onEnter;
@@ -114,6 +118,14 @@ public class DefaultJAgent implements JAgent {
     }
 
     @Override
+    public StreamingChatModel streamingModel() {
+        if (streamingModel != null) {
+            return streamingModel;
+        }
+        return JAgent.super.streamingModel();
+    }
+
+    @Override
     public List<ToolSpecification> externalTools() {
         return externalTools;
     }
@@ -162,6 +174,7 @@ public class DefaultJAgent implements JAgent {
         private String instructions;
         private Function<SwarmContext, String> instructionsProvider;
         private ChatModel model;
+        private StreamingChatModel streamingModel;
         private Object[] toolBeans = new Object[0];
         private Consumer<SwarmContext> onEnter;
         private Consumer<SwarmContext> onExit;
@@ -192,6 +205,11 @@ public class DefaultJAgent implements JAgent {
 
         public Builder model(ChatModel model) {
             this.model = model;
+            return this;
+        }
+
+        public Builder streamingModel(StreamingChatModel streamingModel) {
+            this.streamingModel = streamingModel;
             return this;
         }
 

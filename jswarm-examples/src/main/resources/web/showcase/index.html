@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Jswarm Showcase · 智能客服</title>
-<link rel="stylesheet" href="/web/showcase/showcase.css">
+<link rel="stylesheet" href="/web/showcase/showcase.css?v=2">
 <script>
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.getRegistrations().then(function(regs) {
@@ -20,6 +20,7 @@ if ('serviceWorker' in navigator) {
     <div class="subtitle">全能力智能客服 · 编排可视化</div>
   </div>
   <div class="header-meta">
+    <span class="status-dot" id="stream-dot" title="流式输出" style="margin-right:6px"></span>
     <span class="status-dot" title="服务在线"></span>
     <span id="user-badge">张三 · 黄金VIP</span>
     <span id="agent-tag" title="当前接管 Agent">router · 路由专员</span>
@@ -146,6 +147,6 @@ if ('serviceWorker' in navigator) {
   </aside>
 </div>
 
-<script src="/web/showcase/showcase.js"></script>
+<script src="/web/showcase/showcase.js?v=2"></script>
 </body>
 </html>

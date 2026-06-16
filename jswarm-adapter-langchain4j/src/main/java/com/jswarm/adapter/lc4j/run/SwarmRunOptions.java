@@ -8,17 +8,20 @@ public final class SwarmRunOptions {
     public static final int DEFAULT_MAX_RECOVERY_ATTEMPTS = 2;
     public static final int DEFAULT_MAX_DELEGATE_DEPTH = 3;
     public static final Duration DEFAULT_MODEL_TIMEOUT = Duration.ofSeconds(60);
+    public static final boolean DEFAULT_DELEGATE_STREAMING = true;
 
     private final int maxTurns;
     private final int maxRecoveryAttempts;
     private final int maxDelegateDepth;
     private final Duration modelTimeout;
+    private final boolean delegateStreaming;
 
     private SwarmRunOptions(Builder builder) {
         this.maxTurns = builder.maxTurns;
         this.maxRecoveryAttempts = builder.maxRecoveryAttempts;
         this.maxDelegateDepth = builder.maxDelegateDepth;
         this.modelTimeout = builder.modelTimeout;
+        this.delegateStreaming = builder.delegateStreaming;
     }
 
     public int maxTurns() {
@@ -37,6 +40,10 @@ public final class SwarmRunOptions {
         return modelTimeout;
     }
 
+    public boolean delegateStreaming() {
+        return delegateStreaming;
+    }
+
     public static SwarmRunOptions defaults() {
         return new Builder().build();
     }
@@ -50,6 +57,7 @@ public final class SwarmRunOptions {
         private int maxRecoveryAttempts = DEFAULT_MAX_RECOVERY_ATTEMPTS;
         private int maxDelegateDepth = DEFAULT_MAX_DELEGATE_DEPTH;
         private Duration modelTimeout = DEFAULT_MODEL_TIMEOUT;
+        private boolean delegateStreaming = DEFAULT_DELEGATE_STREAMING;
 
         public Builder maxTurns(int maxTurns) {
             this.maxTurns = maxTurns;
@@ -68,6 +76,11 @@ public final class SwarmRunOptions {
 
         public Builder modelTimeout(Duration modelTimeout) {
             this.modelTimeout = modelTimeout;
+            return this;
+        }
+
+        public Builder delegateStreaming(boolean delegateStreaming) {
+            this.delegateStreaming = delegateStreaming;
             return this;
         }
 

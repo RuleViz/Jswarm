@@ -3,8 +3,10 @@ package com.jswarm.adapter.lc4j.run;
 import com.jswarm.adapter.lc4j.ExternalToolExecutor;
 import com.jswarm.adapter.lc4j.JAgent;
 import com.jswarm.adapter.lc4j.ToolProvider;
+import com.jswarm.adapter.lc4j.invoke.StreamingChatInvoker;
 import com.jswarm.core.Agent;
 import com.jswarm.core.SwarmContext;
+import com.jswarm.core.SwarmEvent;
 import com.jswarm.adapter.lc4j.filter.FilterDecision;
 import com.jswarm.adapter.lc4j.filter.SwarmFilter;
 import com.jswarm.adapter.lc4j.invoke.ChatInvoker;
@@ -23,6 +25,7 @@ import dev.langchain4j.agent.tool.ToolSpecification;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Consumer;
 
 public final class SwarmRunner {
 
@@ -215,6 +218,180 @@ public final class SwarmRunner {
                 }
             }
         }
+    }
+
+    public void runStreaming(String userMessage, SwarmContext context, Consumer<SwarmEvent> sink) {
+        SwarmContext previous = SwarmContext.current();
+        SwarmContext.set(context);
+        try {
+            runStreamingInternal(userMessage, sink);
+        } finally {
+            if (previous != null) {
+                SwarmContext.set(previous);
+            } else {
+                SwarmContext.clear();
+            }
+        }
+    }
+
+    private void runStreamingInternal(String userMessage, Consumer<SwarmEvent> sink) {
+        String currentAgentId = swarm.entryAgentId();
+        List<ChatMessage> currentMessages = null;
+        String activeAgentId = null;
+        int recoveryAttempts = 0;
+        SwarmContext ctx = SwarmContext.current();
+
+        RuntimeException failure = null;
+        try {
+            Agent entry = swarm.getAgent(currentAgentId);
+            requireJAgent(entry);
+            entry.onEnter(ctx);
+            activeAgentId = currentAgentId;
+            sink.accept(new SwarmEvent.RunStarted("", currentAgentId));
+            sink.accept(new SwarmEvent.AgentEnter(currentAgentId, "ENTRY"));
+
+            for (int turn = 0; turn < options.maxTurns(); turn++) {
+                Agent agent = swarm.getAgent(currentAgentId);
+                JAgent runtimeAgent = requireJAgent(agent);
+
+                List<ChatMessage> messages;
+                if (currentMessages != null) {
+                    messages = currentMessages;
+                } else {
+                    messages = new ArrayList<>();
+                    String instructions = agent.instructions();
+                    if (instructions == null) {
+                        throw new SwarmException("Agent '" + currentAgentId + "' has no instructions configured");
+                    }
+                    messages.add(SystemMessage.from(ctx.resolve(instructions)));
+                    messages.add(UserMessage.from(userMessage));
+                }
+
+                List<ToolSpecification> tools = SwarmToolInjector.generateTools(
+                        swarm, currentAgentId, runtimeAgent.externalTools());
+                ExternalToolExecutor exec = ToolExecutionMerger.merge(runtimeAgent.toolExecutor(), swarmToolExecutor);
+
+                ChatRequest request = ChatRequest.builder()
+                        .messages(messages)
+                        .toolSpecifications(tools)
+                        .build();
+
+                AiMessage aiMessage = StreamingChatInvoker.stream(runtimeAgent, request, ctx,
+                        options.modelTimeout(), sink);
+
+                if (!aiMessage.hasToolExecutionRequests()) {
+                    activeAgentId = null;
+                    agent.onExit(ctx);
+                    sink.accept(new SwarmEvent.AgentExit(currentAgentId));
+                    sink.accept(new SwarmEvent.RunCompleted(aiMessage.text()));
+                    return;
+                }
+
+                ToolExecutionRequest toolCall = aiMessage.toolExecutionRequests().get(0);
+
+                FilterDecision decision;
+                try {
+                    decision = filter.decide(toolCall);
+                } catch (SwarmException e) {
+                    ensureCanRecover(recoveryAttempts);
+                    recoveryAttempts++;
+                    sink.accept(new SwarmEvent.RecoveryTriggered(currentAgentId,
+                            "Invalid tool call arguments: " + e.getMessage()));
+                    recoverToolCall(messages, aiMessage, toolCall,
+                            "Jswarm recovery: tool call arguments are invalid. Please call the tool again using valid JSON arguments. Error: " + e.getMessage());
+                    currentMessages = messages;
+                    userMessage = null;
+                    continue;
+                }
+
+                if (decision instanceof FilterDecision.Handoff h) {
+                    activeAgentId = null;
+                    agent.onExit(ctx);
+                    sink.accept(new SwarmEvent.AgentExit(currentAgentId));
+                    sink.accept(new SwarmEvent.Handoff(currentAgentId, h.targetAgentId()));
+                    currentAgentId = h.targetAgentId();
+                    Agent to = swarm.getAgent(currentAgentId);
+                    to.onEnter(ctx);
+                    activeAgentId = currentAgentId;
+                    sink.accept(new SwarmEvent.AgentEnter(currentAgentId, "HANDOFF"));
+                    String targetInstructions = ctx.resolve(to.instructions());
+                    List<ChatMessage> preserved = new ArrayList<>(messages);
+                    preserved.set(0, SystemMessage.from(targetInstructions));
+                    currentMessages = preserved;
+                    continue;
+                }
+
+                if (decision instanceof FilterDecision.Delegate d) {
+                    sink.accept(new SwarmEvent.DelegateStarted(currentAgentId, d.targetAgentId(), d.task()));
+                    String result;
+                    try {
+                        if (options.delegateStreaming()) {
+                            result = filter.executeDelegateStreaming(
+                                    d.targetAgentId(), d.task(), swarmToolExecutor, options, sink);
+                        } else {
+                            result = filter.executeDelegate(
+                                    d.targetAgentId(), d.task(), swarmToolExecutor, options);
+                        }
+                    } catch (RuntimeException e) {
+                        ensureCanRecover(recoveryAttempts);
+                        recoveryAttempts++;
+                        result = "Jswarm recovery: delegate to '" + d.targetAgentId()
+                                + "' failed. Please handle the user request directly. Error: " + e.getMessage();
+                        sink.accept(new SwarmEvent.RecoveryTriggered(currentAgentId,
+                                "Delegate failed: " + e.getMessage()));
+                    }
+                    sink.accept(new SwarmEvent.DelegateFinished(currentAgentId, d.targetAgentId()));
+                    messages.add(aiMessage);
+                    messages.add(ToolExecutionResultMessage.from(toolCall, result));
+                    currentMessages = messages;
+                    userMessage = null;
+                    continue;
+                }
+
+                sink.accept(new SwarmEvent.ToolCall(currentAgentId, toolCall.name(), toolCall.arguments()));
+                String result;
+                try {
+                    result = exec.execute(toolCall);
+                } catch (RuntimeException e) {
+                    ensureCanRecover(recoveryAttempts);
+                    recoveryAttempts++;
+                    result = "Jswarm recovery: tool '" + toolCall.name()
+                            + "' failed. Please answer directly or try another available tool. Error: " + e.getMessage();
+                    sink.accept(new SwarmEvent.RecoveryTriggered(currentAgentId,
+                            "External tool '" + toolCall.name() + "' failed: " + e.getMessage()));
+                }
+                sink.accept(new SwarmEvent.ToolResult(currentAgentId, toolCall.name(), truncate(result, 200)));
+                messages.add(aiMessage);
+                messages.add(ToolExecutionResultMessage.from(toolCall, result));
+                currentMessages = messages;
+                userMessage = null;
+            }
+
+            throw new SwarmException("Max turns (" + options.maxTurns() + ") exceeded");
+        } catch (RuntimeException e) {
+            failure = e;
+            sink.accept(new SwarmEvent.RunFailed(
+                    activeAgentId != null ? activeAgentId : currentAgentId, e.getMessage()));
+            throw e;
+        } finally {
+            if (activeAgentId != null) {
+                try {
+                    swarm.getAgent(activeAgentId).onExit(ctx);
+                    sink.accept(new SwarmEvent.AgentExit(activeAgentId));
+                } catch (RuntimeException hookEx) {
+                    if (failure != null) {
+                        failure.addSuppressed(hookEx);
+                    } else {
+                        throw hookEx;
+                    }
+                }
+            }
+        }
+    }
+
+    private static String truncate(String s, int max) {
+        if (s == null) return null;
+        return s.length() <= max ? s : s.substring(0, max) + "...";
     }
 
     private void ensureCanRecover(int recoveryAttempts) {

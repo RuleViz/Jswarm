@@ -4,6 +4,7 @@ package com.jswarm.adapter.lc4j;
 import com.jswarm.core.SwarmContext;
 import dev.langchain4j.agent.tool.ToolSpecification;
 import dev.langchain4j.model.chat.ChatModel;
+import dev.langchain4j.model.chat.StreamingChatModel;
 
 import java.util.List;
 import java.util.function.BiConsumer;
@@ -49,6 +50,11 @@ final class ForwardingJAgent implements JAgent {
     @Override
     public ChatModel model() {
         return delegate.model();
+    }
+
+    @Override
+    public StreamingChatModel streamingModel() {
+        return delegate.streamingModel();
     }
 
     @Override

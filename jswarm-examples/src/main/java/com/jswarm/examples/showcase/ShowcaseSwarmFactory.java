@@ -12,6 +12,7 @@ import com.jswarm.examples.lc4jlegacy.OrderServiceTools;
 import com.jswarm.examples.lc4jlegacy.RouterAssistant;
 import com.jswarm.examples.lc4jlegacy.UserProfileRepository;
 import dev.langchain4j.model.chat.ChatModel;
+import dev.langchain4j.model.chat.StreamingChatModel;
 
 import java.time.Instant;
 import java.util.List;
@@ -31,13 +32,23 @@ public final class ShowcaseSwarmFactory {
     }
 
     public static BuildResult build(ChatModel model) {
+        return build(model, null);
+    }
+
+    public static BuildResult build(ChatModel model, StreamingChatModel streamingModel) {
         OrderRepository orderRepository = new OrderRepository();
         UserProfileRepository userProfileRepository = new UserProfileRepository();
         OrderServiceTools orderTools = new OrderServiceTools(orderRepository);
         ShowcaseAuditTools auditTools = new ShowcaseAuditTools();
 
-        JAgent routerBase = JAgent.fromAiService("router", "路由专员", "分析意图并分发",
-                RouterAssistant.class, model, auditTools);
+        String routerInstructions = Lc4jAgentExtractor.extractInstructions(RouterAssistant.class);
+        JAgent routerBase = JAgent.builder("router", "路由专员")
+                .description("分析意图并分发")
+                .instructions(routerInstructions)
+                .model(model)
+                .streamingModel(streamingModel)
+                .tools(auditTools)
+                .build();
 
         JAgent router = JAgent.decorate(routerBase)
                 .onEnter(ctx -> {
@@ -56,6 +67,7 @@ public final class ShowcaseSwarmFactory {
                 .instructions("你是技术支持专员。当前用户：{user_name}（{vip_level}）。" +
                         "VIP 用户给出更详尽的排查步骤。结合对话历史回答。")
                 .model(model)
+                .streamingModel(streamingModel)
                 .onEnter(ctx -> {
                     ctx.put("entered_at", Instant.now().toString());
                     ShowcaseEventCollector c = ShowcaseEventCollector.current();
@@ -77,6 +89,7 @@ public final class ShowcaseSwarmFactory {
                             tier + "。热情解答价格与购买问题。";
                 })
                 .model(model)
+                .streamingModel(streamingModel)
                 .onEnter(ctx -> {
                     ShowcaseEventCollector c = ShowcaseEventCollector.current();
                     if (c != null) {
@@ -86,8 +99,13 @@ public final class ShowcaseSwarmFactory {
                 .build();
 
         String orderInstructions = Lc4jAgentExtractor.extractInstructions(OrderAssistant.class);
-        JAgent orderBase = JAgent.fromTools("order", "订单专员", "订单查询、物流与退换货",
-                orderInstructions, model, orderTools);
+        JAgent orderBase = JAgent.builder("order", "订单专员")
+                .description("订单查询、物流与退换货")
+                .instructions(orderInstructions)
+                .model(model)
+                .streamingModel(streamingModel)
+                .tools(orderTools)
+                .build();
         JAgent order = JAgent.decorate(orderBase)
                 .onDelegateEnter((ctx, task) -> {
                     String userId = ctx.get("user_id", String.class);
@@ -114,6 +132,7 @@ public final class ShowcaseSwarmFactory {
                 .description("订单与消费数据摘要分析")
                 .instructions("你是数据分析师。根据 task 给出简洁的数据摘要与建议，用条目列出。")
                 .model(model)
+                .streamingModel(streamingModel)
                 .build();
 
         Swarm swarm = Swarm.create("Jswarm Showcase 智能客服")

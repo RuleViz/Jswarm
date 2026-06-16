@@ -153,6 +153,129 @@ function addInlineTrace(ev) {
   msgArea.scrollTop = msgArea.scrollHeight;
 }
 
+let streamingAgentMsgs = {};
+let currentStreamingAgent = null;
+
+function streamMsgContainer(agentId, source) {
+  if (!streamingAgentMsgs[agentId]) {
+    const el = document.createElement('div');
+    el.className = 'msg agent stream-agent';
+    el.dataset.agentId = agentId;
+    const head = document.createElement('div');
+    head.className = 'stream-agent-head';
+    let sourceLabel = '';
+    if (source === 'HANDOFF') sourceLabel = ' ← handoff';
+    else if (source === 'DELEGATE') sourceLabel = ' ↪ delegate';
+    head.textContent = agentLabel(agentId) + sourceLabel;
+    el.appendChild(head);
+    const body = document.createElement('div');
+    body.className = 'stream-body';
+    el.appendChild(body);
+    msgArea.appendChild(el);
+    streamingAgentMsgs[agentId] = body;
+  }
+  return streamingAgentMsgs[agentId];
+}
+
+function handleStreamEvent(type, data) {
+  switch (type) {
+    case 'RunStarted':
+      if (data.entryAgentId) updateTopology(data.entryAgentId);
+      break;
+    case 'AgentEnter':
+      currentStreamingAgent = data.agentId;
+      updateTopology(data.agentId);
+      streamMsgContainer(data.agentId, data.source);
+      break;
+    case 'Token':
+      if (data.agentId) {
+        const body = streamingAgentMsgs[data.agentId];
+        if (body) {
+          body.textContent += data.text;
+          msgArea.scrollTop = msgArea.scrollHeight;
+        }
+      }
+      break;
+    case 'AgentExit':
+      break;
+    case 'Handoff':
+      addInlineTrace({type: 'handoff', from: data.from, to: data.to});
+      updateTopology(data.to);
+      break;
+    case 'DelegateStarted':
+      addInlineTrace({type: 'delegate', from: data.parent, to: data.delegateAgent, task: data.task});
+      break;
+    case 'DelegateFinished':
+      break;
+    case 'ToolCall':
+      addInlineTrace({type: 'tool', agent: data.agentId, detail: data.toolName});
+      break;
+    case 'ToolResult':
+      break;
+    case 'RecoveryTriggered':
+      addInlineTrace({type: 'onExit', agent: data.agentId, detail: 'Recovery: ' + data.reason});
+      break;
+    case 'RunCompleted':
+      currentStreamingAgent = null;
+      break;
+    case 'RunFailed':
+      addMsg('错误: ' + (data.error || 'unknown'), 'system');
+      break;
+  }
+}
+
+async function sendChat(message) {
+  if (!message || loading) return;
+  setLoading(true);
+  addMsg(message, 'user');
+  streamingAgentMsgs = {};
+  currentStreamingAgent = null;
+
+  try {
+    const resp = await fetch('/api/chat/stream', {
+      method: 'POST',
+      cache: 'no-store',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId, userId: selectedUserId(), message })
+    });
+    if (!resp.ok) {
+      if (resp.status === 400) {
+        const err = await resp.json();
+        throw new Error(err.error);
+      }
+      throw new Error('HTTP ' + resp.status);
+    }
+
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const chunks = buf.split('\n\n');
+      buf = chunks.pop();
+      for (const chunk of chunks) {
+        const lines = chunk.split('\n');
+        let eventType = '', eventData = '';
+        for (const line of lines) {
+          if (line.startsWith('event:')) eventType = line.slice(6).trim();
+          else if (line.startsWith('data:')) eventData += line.slice(5);
+        }
+        if (eventType && eventData) {
+          eventData = eventData.trim();
+          handleStreamEvent(eventType, JSON.parse(eventData));
+        }
+      }
+    }
+  } catch (e) {
+    addMsg('连接失败: ' + e.message, 'system');
+  }
+  setLoading(false);
+  userInput.focus();
+}
+
 function addLoading() {
   const el = document.createElement('div');
   el.className = 'msg agent';
@@ -165,6 +288,13 @@ function addLoading() {
 function removeLoading() {
   const el = document.getElementById('loading-msg');
   if (el) el.remove();
+}
+
+function escapeHtml(s) {
+  if (s == null) return '';
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
 }
 
 function formatEventBody(ev) {
@@ -222,49 +352,9 @@ function renderContext(ctx) {
   contextTable.innerHTML = rows;
 }
 
-function escapeHtml(s) {
-  if (s == null) return '';
-  const d = document.createElement('div');
-  d.textContent = s;
-  return d.innerHTML;
-}
-
 function updateUserBadge() {
   const uid = selectedUserId();
   userBadge.textContent = USER_LABELS[uid] || uid;
-}
-
-async function sendChat(message) {
-  if (!message || loading) return;
-  setLoading(true);
-  addMsg(message, 'user');
-  addLoading();
-  try {
-    const resp = await apiFetch('/api/chat', {
-      method: 'POST',
-      body: JSON.stringify({ sessionId, userId: selectedUserId(), message })
-    });
-    if (!resp.ok) {
-      const err = await resp.json().catch(() => ({}));
-      throw new Error(err.error || ('HTTP ' + resp.status));
-    }
-    const data = await resp.json();
-    removeLoading();
-    if (data.error) {
-      addMsg('错误: ' + data.error, 'system');
-    } else {
-      persistSessionId(data.sessionId);
-      updateTopology(data.currentAgent);
-      renderEvents(data.events);
-      renderContext(data.context);
-      addMsg(data.reply, 'agent');
-    }
-  } catch (e) {
-    removeLoading();
-    addMsg('连接失败: ' + e.message, 'system');
-  }
-  setLoading(false);
-  userInput.focus();
 }
 
 async function runScenario(scenarioId) {
