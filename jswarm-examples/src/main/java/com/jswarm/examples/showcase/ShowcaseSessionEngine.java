@@ -6,6 +6,7 @@ import com.jswarm.adapter.lc4j.JAgent;
 import com.jswarm.adapter.lc4j.filter.FilterDecision;
 import com.jswarm.adapter.lc4j.filter.SwarmFilter;
 import com.jswarm.adapter.lc4j.invoke.ChatInvoker;
+import com.jswarm.adapter.lc4j.run.ChatMessageCodec;
 import com.jswarm.adapter.lc4j.run.SwarmRunOptions;
 import com.jswarm.adapter.lc4j.tool.SwarmToolInjector;
 import com.jswarm.adapter.lc4j.tool.ToolExecutionMerger;
@@ -63,7 +64,7 @@ public final class ShowcaseSessionEngine {
                 ? null
                 : new ArrayList<>(session.history());
         if (currentMessages != null) {
-            currentMessages = new ArrayList<>(ShowcaseChatMessageCodec.forPersistence(currentMessages));
+            currentMessages = new ArrayList<>(ChatMessageCodec.forPersistence(currentMessages));
             currentMessages.add(UserMessage.from(userMessage));
         }
         int recoveryAttempts = 0;
@@ -106,7 +107,7 @@ public final class ShowcaseSessionEngine {
                     continue;
                 }
                 messages.add(aiMessage);
-                session.setHistory(ShowcaseChatMessageCodec.forPersistence(messages));
+                session.setHistory(ChatMessageCodec.forPersistence(messages));
                 return new ChatResult(aiMessage.text(), session.currentAgentId(),
                         collector.snapshotMaps(), contextSnapshot(session.context()));
             }

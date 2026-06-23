@@ -3,6 +3,7 @@ package com.jswarm.examples.showcase;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.jswarm.adapter.lc4j.run.ChatMessageCodec;
 import com.jswarm.core.SwarmContext;
 
 import java.nio.file.Files;
@@ -71,7 +72,7 @@ public final class ShowcaseSessionStore implements AutoCloseable {
                 ShowcaseSession session = new ShowcaseSession(sessionId, entryAgentId, ctx);
                 session.setCurrentAgentId(rs.getString("current_agent_id"));
                 session.setEntryHookFired(rs.getInt("entry_hook_fired") == 1);
-                session.setHistory(ShowcaseChatMessageCodec.decode(rs.getString("history_json")));
+                session.setHistory(ChatMessageCodec.decode(rs.getString("history_json")));
                 return Optional.of(session);
             }
         } catch (Exception e) {
@@ -86,7 +87,7 @@ public final class ShowcaseSessionStore implements AutoCloseable {
                 userId = "u001";
             }
             String contextJson = encodeContext(session.context());
-            String historyJson = ShowcaseChatMessageCodec.encode(session.history());
+            String historyJson = ChatMessageCodec.encode(session.history());
             try (PreparedStatement ps = connection.prepareStatement("""
                     INSERT INTO showcase_session
                     (session_id, user_id, current_agent_id, entry_hook_fired, context_json, history_json, updated_at)
