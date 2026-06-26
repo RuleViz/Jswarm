@@ -33,13 +33,17 @@ public final class SwarmRunner {
     private final SwarmRunOptions options;
     private final SwarmFilter filter;
     private final ExternalToolExecutor swarmToolExecutor;
-    private final SwarmRunListener listener;
+    private SwarmRunListener listener;
 
     private SwarmRunner(Swarm swarm, SwarmRunOptions options, ExternalToolExecutor swarmToolExecutor, SwarmRunListener listener) {
         this.swarm = swarm;
         this.options = options;
         this.filter = new SwarmFilter(swarm);
         this.swarmToolExecutor = swarmToolExecutor;
+        this.listener = listener;
+    }
+
+    public void setListener(SwarmRunListener listener) {
         this.listener = listener;
     }
 
